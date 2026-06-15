@@ -1,3 +1,4 @@
+import bcrypt from 'bcrypt';
 import { OTPService } from '.';
 import {
   ErrorResponse,
@@ -11,6 +12,17 @@ import { IUserModel, UserService } from '../../users';
 import { IOTPModel } from '../types';
 
 class AuthService {
+  /**
+   * Strip the password field from a user document before including it
+   * in an API response. Prevents password hashes from leaking to clients.
+   */
+  private sanitizeUser(user: any): any {
+    if (!user) return user;
+    const obj =
+      typeof user.toObject === 'function' ? user.toObject() : { ...user };
+    delete obj.password;
+    return obj;
+  }
   async register(
     payload: any,
   ): Promise<SuccessResponseType<any> | ErrorResponseType> {
@@ -52,7 +64,7 @@ class AuthService {
       return {
         success: true,
         document: {
-          user: createUserResponse.document,
+          user: this.sanitizeUser(createUserResponse.document),
           otp: otpResponse.document,
         },
       };
@@ -204,14 +216,17 @@ class AuthService {
         );
       }
 
-      const accessToken = await JwtService.signAccessToken(user.id);
+      // Sign refresh token first (includes Redis write). If Redis fails,
+      // we abort before creating the access token, avoiding an inconsistent
+      // state where an access token exists but no refresh token is stored.
       const refreshToken = await JwtService.signRefreshToken(user.id);
+      const accessToken = await JwtService.signAccessToken(user.id);
 
       return {
         success: true,
         document: {
           token: { access: accessToken, refresh: refreshToken },
-          user,
+          user: this.sanitizeUser(user),
         },
       };
     } catch (error) {
@@ -264,14 +279,17 @@ class AuthService {
         );
       }
 
-      const accessToken = await JwtService.signAccessToken(user.id);
+      // Sign refresh token first (includes Redis write). If Redis fails,
+      // we abort before creating the access token, avoiding an inconsistent
+      // state where an access token exists but no refresh token is stored.
       const refreshToken = await JwtService.signRefreshToken(user.id);
+      const accessToken = await JwtService.signAccessToken(user.id);
 
       return {
         success: true,
         document: {
           token: { access: accessToken, refresh: refreshToken },
-          user,
+          user: this.sanitizeUser(user),
         },
       };
     } catch (error) {
@@ -297,6 +315,25 @@ class AuthService {
       }
 
       const userId = await JwtService.verifyRefreshToken(refreshToken);
+
+      // Verify the user still exists and is active before issuing new tokens.
+      // Without this check, a deactivated user could keep refreshing tokens
+      // indefinitely even after an admin disabled their account.
+      const userResponse = (await UserService.findOne({
+        _id: userId,
+      })) as SuccessResponseType<IUserModel>;
+
+      if (!userResponse.success || !userResponse.document) {
+        throw new ErrorResponse('UNAUTHORIZED', 'User not found.');
+      }
+
+      if (!userResponse.document.active) {
+        throw new ErrorResponse(
+          'FORBIDDEN',
+          'Inactive account, please contact admins.',
+        );
+      }
+
       const accessToken = await JwtService.signAccessToken(userId);
       // Refresh token change to ensure rotation
       const newRefreshToken = await JwtService.signRefreshToken(userId);
@@ -453,6 +490,17 @@ class AuthService {
 
       if (!validateOtpResponse.success) {
         throw validateOtpResponse.error;
+      }
+
+      // Reject if the new password is the same as the current password.
+      // Users must choose a genuinely different password when resetting.
+      const isSamePassword = await bcrypt.compare(newPassword, user.password);
+      if (isSamePassword) {
+        throw new ErrorResponse(
+          'BAD_REQUEST',
+          'New password must be different from the current password.',
+          ['Please choose a different password.'],
+        );
       }
 
       const updatePasswordResponse = await UserService.updatePassword(

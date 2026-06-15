@@ -1,4 +1,3 @@
-import { config } from '../../../core/config';
 import bcrypt from 'bcrypt';
 import {
   ErrorResponse,
@@ -50,29 +49,24 @@ class UserService extends BaseService<IUserModel, UserRepository> {
     newPassword: string,
   ): Promise<SuccessResponseType<IUserModel> | ErrorResponseType> {
     try {
-      const response = (await this.findOne({
-        _id: userId,
-      })) as SuccessResponseType<IUserModel>;
-      if (!response.success || !response.document) {
-        throw response.error;
+      // Fetch the actual Mongoose document so we can use .save()
+      // which triggers the pre('save') hook for exactly-once password hashing.
+      // Previously this method manually hashed with bcrypt then called this.update()
+      // (which uses findOneAndUpdate), risking double-hashing if the pre('save')
+      // hook also fired — leaving the user unable to log in.
+      const user = await this.repository.findOne({ _id: userId });
+      if (!user) {
+        throw new ErrorResponse('NOT_FOUND_ERROR', 'User not found.');
       }
 
-      const hashedPassword = await bcrypt.hash(
-        newPassword,
-        config.bcrypt.saltRounds,
-      );
-      const updateResponse = (await this.update(
-        { _id: userId },
-        { password: hashedPassword },
-      )) as SuccessResponseType<IUserModel>;
-
-      if (!updateResponse.success) {
-        throw updateResponse.error;
-      }
+      // Set plain-text password; the pre('save') hook on the User schema
+      // will detect the modified password field and hash it exactly once.
+      user.password = newPassword;
+      const updatedUser = await user.save();
 
       return {
         success: true,
-        document: updateResponse.document,
+        document: updatedUser,
       };
     } catch (error) {
       return {
