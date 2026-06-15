@@ -147,12 +147,35 @@ class JwtService {
             return reject(errorResponse);
           }
 
+          // Guard against Redis hanging indefinitely (e.g. network partition
+          // where the connection stays open but no response ever arrives).
+          // Without a timeout the login request would hang forever because
+          // the callback below would never fire.
+          let settled = false;
+          const redisTimeout = setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              logger.error(
+                `Redis SET for refresh token timed out (userId=${userId})`,
+              );
+              const errorResponse = new ErrorResponse(
+                'INTERNAL_SERVER_ERROR',
+                'Internal Server Error',
+              );
+              reject(errorResponse);
+            }
+          }, 5000);
+
           client.set(
             userId,
             token,
             'EX',
             this.redisTokenExpireTime,
             (redisErr: any) => {
+              if (settled) return; // timeout already fired
+              settled = true;
+              clearTimeout(redisTimeout);
+
               if (redisErr) {
                 logger.error(redisErr.message, redisErr);
                 const errorResponse = new ErrorResponse(

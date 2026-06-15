@@ -1,4 +1,3 @@
-import { config } from '../../../core/config';
 import bcrypt from 'bcrypt';
 import {
   ErrorResponse,
@@ -57,22 +56,17 @@ class UserService extends BaseService<IUserModel, UserRepository> {
         throw response.error;
       }
 
-      const hashedPassword = await bcrypt.hash(
-        newPassword,
-        config.bcrypt.saltRounds,
-      );
-      const updateResponse = (await this.update(
-        { _id: userId },
-        { password: hashedPassword },
-      )) as SuccessResponseType<IUserModel>;
-
-      if (!updateResponse.success) {
-        throw updateResponse.error;
-      }
+      // Assign plain password to the document and call save().
+      // The pre('save') hook on the User model will hash it exactly once.
+      // Previously this method manually called bcrypt.hash and then this.update()
+      // (which uses findOneAndUpdate under the hood). If the hook ever fired
+      // on top of that, the password was double-hashed and unverifiable.
+      response.document.password = newPassword;
+      const savedDoc = await response.document.save();
 
       return {
         success: true,
-        document: updateResponse.document,
+        document: savedDoc,
       };
     } catch (error) {
       return {

@@ -29,6 +29,14 @@ class UserController {
     try {
       const response = await UserService.findAll(req.query);
       if (response.success) {
+        // Strip password hashes from all returned documents
+        if ('documents' in response && Array.isArray(response.documents)) {
+          response.documents = response.documents.map((doc: any) => {
+            const obj = doc.toObject ? doc.toObject() : { ...doc };
+            delete obj.password;
+            return obj;
+          });
+        }
         ApiResponse.success(res, response);
       } else {
         throw response;
@@ -50,6 +58,13 @@ class UserController {
       });
 
       if (response.success) {
+        // Strip password hash from the returned document
+        if ('document' in response && response.document) {
+          const doc = response.document as any;
+          const obj = doc.toObject ? doc.toObject() : { ...doc };
+          delete obj.password;
+          (response as any).document = obj;
+        }
         ApiResponse.success(res, response);
       } else {
         throw response;

@@ -1,4 +1,5 @@
 import { OTPService } from '.';
+import bcrypt from 'bcrypt';
 import {
   ErrorResponse,
   ErrorResponseType,
@@ -52,7 +53,7 @@ class AuthService {
       return {
         success: true,
         document: {
-          user: createUserResponse.document,
+          user: this.stripPassword(createUserResponse.document),
           otp: otpResponse.document,
         },
       };
@@ -211,7 +212,7 @@ class AuthService {
         success: true,
         document: {
           token: { access: accessToken, refresh: refreshToken },
-          user,
+          user: this.stripPassword(user),
         },
       };
     } catch (error) {
@@ -271,7 +272,7 @@ class AuthService {
         success: true,
         document: {
           token: { access: accessToken, refresh: refreshToken },
-          user,
+          user: this.stripPassword(user),
         },
       };
     } catch (error) {
@@ -297,6 +298,24 @@ class AuthService {
       }
 
       const userId = await JwtService.verifyRefreshToken(refreshToken);
+
+      // Verify the user still exists and is active before issuing new tokens.
+      // Without this check, a deactivated user could keep refreshing indefinitely.
+      const userResponse = (await UserService.findOne({
+        _id: userId,
+      })) as SuccessResponseType<IUserModel>;
+
+      if (!userResponse.success || !userResponse.document) {
+        throw new ErrorResponse('UNAUTHORIZED', 'User not found.');
+      }
+
+      if (!userResponse.document.active) {
+        throw new ErrorResponse(
+          'FORBIDDEN',
+          'Account is inactive, please contact admins.',
+        );
+      }
+
       const accessToken = await JwtService.signAccessToken(userId);
       // Refresh token change to ensure rotation
       const newRefreshToken = await JwtService.signRefreshToken(userId);
@@ -455,6 +474,15 @@ class AuthService {
         throw validateOtpResponse.error;
       }
 
+      // Reject if the new password is the same as the current password
+      const isSamePassword = await bcrypt.compare(newPassword, user.password);
+      if (isSamePassword) {
+        throw new ErrorResponse(
+          'BAD_REQUEST',
+          'New password must be different from the current password.',
+        );
+      }
+
       const updatePasswordResponse = await UserService.updatePassword(
         user.id,
         newPassword,
@@ -477,6 +505,16 @@ class AuthService {
               ),
       };
     }
+  }
+
+  /**
+   * Return a plain object copy of the user document with the password
+   * field removed. Safe to include in API responses.
+   */
+  private stripPassword(user: IUserModel): Record<string, any> {
+    const obj = user.toObject ? user.toObject() : { ...user };
+    delete obj.password;
+    return obj;
   }
 }
 
