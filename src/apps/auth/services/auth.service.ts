@@ -1,37 +1,118 @@
-import { OTPService } from '.';
 import {
   ErrorResponse,
   ErrorResponseType,
   JwtService,
   MailServiceUtilities,
   SuccessResponseType,
+  handleServiceOperation,
+  isSuccessResponse,
 } from '../../../common/shared';
 import { config } from '../../../core/config';
-import { IUserModel, UserService } from '../../users';
-import { IOTPModel } from '../types';
+import { IUserModel } from '../../users';
+import {
+  ILoginResult,
+  ILoginWithOtpPayload,
+  ILoginWithPasswordPayload,
+  IOTPModel,
+  IRegisterPayload,
+  IRegisterResult,
+  IResetPasswordPayload,
+  IVerifyAccountPayload,
+} from '../types';
+
+/**
+ * Interface describing the UserService methods that AuthService depends on.
+ * Enables dependency injection for testing.
+ */
+export interface IUserServiceDependency {
+  findOne(
+    query: Record<string, unknown>,
+  ): Promise<SuccessResponseType<IUserModel> | ErrorResponseType>;
+  create(
+    input: Partial<IUserModel>,
+  ): Promise<SuccessResponseType<IUserModel> | ErrorResponseType>;
+  markAsVerified(
+    email: string,
+  ): Promise<SuccessResponseType<IUserModel> | ErrorResponseType>;
+  isValidPassword(
+    userId: string,
+    password: string,
+  ): Promise<SuccessResponseType<{ isValid: boolean }> | ErrorResponseType>;
+  updatePassword(
+    userId: string,
+    newPassword: string,
+  ): Promise<SuccessResponseType<IUserModel> | ErrorResponseType>;
+}
+
+/**
+ * Interface describing the OTPService methods that AuthService depends on.
+ * Enables dependency injection for testing.
+ */
+export interface IOTPServiceDependency {
+  generate(
+    email: string,
+    purpose: string,
+  ): Promise<SuccessResponseType<IOTPModel> | ErrorResponseType>;
+  validate(
+    email: string,
+    code: string,
+    purpose: string,
+  ): Promise<SuccessResponseType<null> | ErrorResponseType>;
+}
 
 class AuthService {
-  async register(
-    payload: any,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
-      const { email } = payload;
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+  private userService?: IUserServiceDependency;
+  private otpService?: IOTPServiceDependency;
 
-      if (userResponse.success && userResponse.document) {
+  constructor(
+    userService?: IUserServiceDependency,
+    otpService?: IOTPServiceDependency,
+  ) {
+    if (userService) this.userService = userService;
+    if (otpService) this.otpService = otpService;
+  }
+
+  private getUserService(): IUserServiceDependency {
+    if (!this.userService) {
+      // Lazy-load to avoid circular dependency issues at module init time
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { UserService } = require('../../users');
+      this.userService = UserService as IUserServiceDependency;
+    }
+    return this.userService;
+  }
+
+  private getOTPService(): IOTPServiceDependency {
+    if (!this.otpService) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { OTPService } = require('.');
+      this.otpService = OTPService as IOTPServiceDependency;
+    }
+    return this.otpService;
+  }
+
+  async register(
+    payload: IRegisterPayload,
+  ): Promise<SuccessResponseType<IRegisterResult> | ErrorResponseType> {
+    return handleServiceOperation<IRegisterResult>(async () => {
+      const { email } = payload;
+      const userResponse = await this.getUserService().findOne({ email });
+
+      if (isSuccessResponse(userResponse) && userResponse.document) {
         throw new ErrorResponse(
           'UNIQUE_FIELD_ERROR',
           'The entered email is already registered.',
         );
       }
 
-      const createUserResponse = (await UserService.create(
-        payload,
-      )) as SuccessResponseType<IUserModel>;
+      const createUserResponse = await this.getUserService().create(
+        payload as Partial<IUserModel>,
+      );
 
-      if (!createUserResponse.success || !createUserResponse.document) {
+      if (
+        !isSuccessResponse(createUserResponse) ||
+        !createUserResponse.document
+      ) {
         throw createUserResponse.error;
       }
 
@@ -40,12 +121,12 @@ class AuthService {
         firstname: createUserResponse.document.firstname,
       });
 
-      const otpResponse = (await OTPService.generate(
+      const otpResponse = await this.getOTPService().generate(
         email,
         config.otp.purposes.ACCOUNT_VERIFICATION.code,
-      )) as SuccessResponseType<IOTPModel>;
+      );
 
-      if (!otpResponse.success || !otpResponse.document) {
+      if (!isSuccessResponse(otpResponse) || !otpResponse.document) {
         throw otpResponse.error;
       }
 
@@ -56,77 +137,52 @@ class AuthService {
           otp: otpResponse.document,
         },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async verifyAccount(
-    payload: any,
+    payload: IVerifyAccountPayload,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
+    return handleServiceOperation<null>(async () => {
       const { email, code } = payload;
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+      const userResponse = await this.getUserService().findOne({ email });
 
-      if (!userResponse.success || !userResponse.document) {
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('NOT_FOUND_ERROR', 'User not found.');
       }
 
       if (userResponse.document.verified) {
-        return { success: true }; // If already verified, return success without further actions
+        return { success: true };
       }
 
-      const validateOtpResponse = await OTPService.validate(
+      const validateOtpResponse = await this.getOTPService().validate(
         email,
         code,
         config.otp.purposes.ACCOUNT_VERIFICATION.code,
       );
 
-      if (!validateOtpResponse.success) {
+      if (!isSuccessResponse(validateOtpResponse)) {
         throw validateOtpResponse.error;
       }
 
-      const verifyUserResponse = await UserService.markAsVerified(email);
+      const verifyUserResponse =
+        await this.getUserService().markAsVerified(email);
 
-      if (!verifyUserResponse.success) {
+      if (!isSuccessResponse(verifyUserResponse)) {
         throw verifyUserResponse.error;
       }
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async generateLoginOtp(
     email: string,
   ): Promise<SuccessResponseType<IOTPModel> | ErrorResponseType> {
-    try {
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+    return handleServiceOperation<IOTPModel>(async () => {
+      const userResponse = await this.getUserService().findOne({ email });
 
-      if (!userResponse.success || !userResponse.document) {
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('NOT_FOUND_ERROR', 'User not found.');
       }
 
@@ -143,51 +199,36 @@ class AuthService {
         );
       }
 
-      const otpResponse = await OTPService.generate(
+      const otpResponse = await this.getOTPService().generate(
         email,
         config.otp.purposes.LOGIN_CONFIRMATION.code,
       );
 
-      if (!otpResponse.success) {
+      if (!isSuccessResponse(otpResponse)) {
         throw otpResponse.error;
       }
 
-      return otpResponse;
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+      return otpResponse as SuccessResponseType<IOTPModel>;
+    });
   }
 
   async loginWithPassword(
-    payload: any,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+    payload: ILoginWithPasswordPayload,
+  ): Promise<SuccessResponseType<ILoginResult> | ErrorResponseType> {
+    return handleServiceOperation<ILoginResult>(async () => {
       const { email, password } = payload;
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+      const userResponse = await this.getUserService().findOne({ email });
 
-      if (!userResponse.success || !userResponse.document) {
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('UNAUTHORIZED', 'Invalid credentials.');
       }
 
       const user = userResponse.document;
-      const isValidPasswordResponse = (await UserService.isValidPassword(
-        user.id,
-        password,
-      )) as SuccessResponseType<{ isValid: boolean }>;
+      const isValidPasswordResponse =
+        await this.getUserService().isValidPassword(user.id, password);
 
       if (
-        !isValidPasswordResponse.success ||
+        !isSuccessResponse(isValidPasswordResponse) ||
         !isValidPasswordResponse.document?.isValid
       ) {
         throw new ErrorResponse('UNAUTHORIZED', 'Invalid credentials.');
@@ -214,42 +255,29 @@ class AuthService {
           user,
         },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async loginWithOtp(
-    payload: any,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+    payload: ILoginWithOtpPayload,
+  ): Promise<SuccessResponseType<ILoginResult> | ErrorResponseType> {
+    return handleServiceOperation<ILoginResult>(async () => {
       const { email, code } = payload;
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+      const userResponse = await this.getUserService().findOne({ email });
 
-      if (!userResponse.success || !userResponse.document) {
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('UNAUTHORIZED', 'Invalid credentials.');
       }
 
       const user = userResponse.document;
 
-      const validateOtpResponse = await OTPService.validate(
+      const validateOtpResponse = await this.getOTPService().validate(
         email,
         code,
         config.otp.purposes.LOGIN_CONFIRMATION.code,
       );
 
-      if (!validateOtpResponse.success) {
+      if (!isSuccessResponse(validateOtpResponse)) {
         throw validateOtpResponse.error;
       }
 
@@ -274,56 +302,40 @@ class AuthService {
           user,
         },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async refresh(
     refreshToken: string,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+  ): Promise<
+    | SuccessResponseType<{ token: { access: string; refresh: string } }>
+    | ErrorResponseType
+  > {
+    return handleServiceOperation<{
+      token: { access: string; refresh: string };
+    }>(async () => {
       if (!refreshToken) {
         throw new ErrorResponse('BAD_REQUEST', 'Refresh token is required.');
       }
 
       const userId = await JwtService.verifyRefreshToken(refreshToken);
       const accessToken = await JwtService.signAccessToken(userId);
-      // Refresh token change to ensure rotation
       const newRefreshToken = await JwtService.signRefreshToken(userId);
 
       return {
         success: true,
-        document: { token: { access: accessToken, refresh: newRefreshToken } },
+        document: {
+          token: { access: accessToken, refresh: newRefreshToken },
+        },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async logout(
     accessToken: string,
     refreshToken: string,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
+    return handleServiceOperation<null>(async () => {
       if (!refreshToken || !accessToken) {
         throw new ErrorResponse(
           'BAD_REQUEST',
@@ -343,40 +355,24 @@ class AuthService {
         );
       }
 
-      // Blacklist the access token
       await JwtService.blacklistToken(accessToken);
-
-      // Remove the refresh token from Redis
       await JwtService.removeFromRedis(userIdFromRefresh);
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async forgotPassword(
     email: string,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
+    return handleServiceOperation<null>(async () => {
       if (!email) {
         throw new ErrorResponse('BAD_REQUEST', 'Email should be provided.');
       }
 
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+      const userResponse = await this.getUserService().findOne({ email });
 
-      if (!userResponse.success || !userResponse.document) {
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('NOT_FOUND_ERROR', 'User not found.');
       }
 
@@ -393,42 +389,28 @@ class AuthService {
         );
       }
 
-      const otpResponse = await OTPService.generate(
+      const otpResponse = await this.getOTPService().generate(
         email,
         config.otp.purposes.FORGOT_PASSWORD.code,
       );
 
-      if (!otpResponse.success) {
+      if (!isSuccessResponse(otpResponse)) {
         throw otpResponse.error;
       }
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async resetPassword(
-    payload: any,
+    payload: IResetPasswordPayload,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
-      // We suppose a verification about new password and confirmation password have already been done
+    return handleServiceOperation<null>(async () => {
       const { email, code, newPassword } = payload;
 
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
+      const userResponse = await this.getUserService().findOne({ email });
 
-      if (!userResponse.success || !userResponse.document) {
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('NOT_FOUND_ERROR', 'User not found.');
       }
 
@@ -445,39 +427,30 @@ class AuthService {
         );
       }
 
-      const validateOtpResponse = await OTPService.validate(
+      const validateOtpResponse = await this.getOTPService().validate(
         email,
         code,
         config.otp.purposes.FORGOT_PASSWORD.code,
       );
 
-      if (!validateOtpResponse.success) {
+      if (!isSuccessResponse(validateOtpResponse)) {
         throw validateOtpResponse.error;
       }
 
-      const updatePasswordResponse = await UserService.updatePassword(
+      const updatePasswordResponse = await this.getUserService().updatePassword(
         user.id,
         newPassword,
       );
 
-      if (!updatePasswordResponse.success) {
+      if (!isSuccessResponse(updatePasswordResponse)) {
         throw updatePasswordResponse.error;
       }
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 }
 
-export default new AuthService();
+// Default singleton instance with lazy-loaded dependencies (backward-compatible)
+const instance = new AuthService();
+export default instance;

@@ -4,30 +4,51 @@ import {
   ErrorResponseType,
   MailServiceUtilities,
   SuccessResponseType,
+  handleServiceOperation,
+  isSuccessResponse,
 } from '../../../common/shared';
-import { IUserModel, UserService } from '../../users';
+import { IUserModel } from '../../users';
 import { OTPModel } from '../models';
 import { IOTPModel, TOTPPurpose } from '../types';
 import { config } from '../../../core/config';
 import { BaseService } from '../../../core/engine';
 import { OTPRepository } from '../repositories';
 
+/**
+ * Interface describing the UserService methods that OTPService depends on.
+ * Enables dependency injection for testing.
+ */
+export interface IUserServiceForOTP {
+  findOne(
+    query: Record<string, unknown>,
+  ): Promise<SuccessResponseType<IUserModel> | ErrorResponseType>;
+}
+
 class OTPService extends BaseService<IOTPModel, OTPRepository> {
-  constructor() {
+  private userService?: IUserServiceForOTP;
+
+  constructor(userService?: IUserServiceForOTP) {
     const otpRepo = new OTPRepository(OTPModel);
     super(otpRepo, false);
+    if (userService) this.userService = userService;
+  }
+
+  private getUserService(): IUserServiceForOTP {
+    if (!this.userService) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { UserService } = require('../../users');
+      this.userService = UserService as IUserServiceForOTP;
+    }
+    return this.userService;
   }
 
   async generate(
     email: string,
     purpose: TOTPPurpose,
   ): Promise<SuccessResponseType<IOTPModel> | ErrorResponseType> {
-    try {
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
-      if (!userResponse.success || !userResponse.document) {
-        // TODO: Customize this kind of error to override BaseService generic not found
+    return handleServiceOperation<IOTPModel>(async () => {
+      const userResponse = await this.getUserService().findOne({ email });
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw userResponse.error;
       }
 
@@ -47,23 +68,12 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
         purpose,
       });
 
-      if (!mailResponse.success) {
+      if (!isSuccessResponse(mailResponse)) {
         throw mailResponse.error;
       }
 
       return { success: true, document: otp };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async validate(
@@ -71,11 +81,9 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
     code: string,
     purpose: TOTPPurpose,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
-      const userResponse = (await UserService.findOne({
-        email,
-      })) as SuccessResponseType<IUserModel>;
-      if (!userResponse.success || !userResponse.document) {
+    return handleServiceOperation<null>(async () => {
+      const userResponse = await this.getUserService().findOne({ email });
+      if (!isSuccessResponse(userResponse) || !userResponse.document) {
         throw new ErrorResponse('NOT_FOUND_ERROR', 'User not found.');
       }
 
@@ -103,19 +111,10 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
       await this.repository.markAsUsed(otp.id);
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 }
 
-export default new OTPService();
+// Default singleton instance with lazy-loaded dependencies (backward-compatible)
+const instance = new OTPService();
+export default instance;

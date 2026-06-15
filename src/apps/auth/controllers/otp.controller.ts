@@ -1,44 +1,22 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { Request, Response, NextFunction } from 'express';
 import { OTPService } from '../services';
-import { ApiResponse, ErrorResponseType } from '../../../common/shared';
+import { controllerHandler } from '../../../common/shared';
 
 class OTPController {
-  static async generateOTP(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
+  static generateOTP = controllerHandler(
+    (req: Request, _res: Response, _next: NextFunction) => {
       const { email, purpose } = req.body;
-      const response = await OTPService.generate(email, purpose);
-      if (response.success) {
-        ApiResponse.success(res, response, 201);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+      return OTPService.generate(email, purpose);
+    },
+    201,
+  );
 
-  static async validateOTP(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
+  static validateOTP = controllerHandler(
+    (req: Request, _res: Response, _next: NextFunction) => {
       const { email, code, purpose } = req.body;
-      const response = await OTPService.validate(email, code, purpose);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+      return OTPService.validate(email, code, purpose);
+    },
+  );
 }
 
 export default OTPController;
