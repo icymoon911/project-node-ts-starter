@@ -111,6 +111,18 @@ class JwtService {
               error: errorResponse,
             });
           }
+
+          const userId = payload?.aud as string;
+          const userBlacklisted = await this.isUserTokenBlacklisted(userId);
+          if (userBlacklisted) {
+            const errorResponse = new ErrorResponse('FORBIDDEN', 'Forbidden', [
+              'User tokens have been revoked',
+            ]);
+            return ApiResponse.error(res, {
+              success: false,
+              error: errorResponse,
+            });
+          }
         } catch (error) {
           return ApiResponse.error(res, {
             success: false,
@@ -246,6 +258,49 @@ class JwtService {
         resolve();
       });
     });
+  }
+
+  isUserTokenBlacklisted(userId: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      client.get(`bl_user_${userId}`, (err: any, result: any) => {
+        if (err) {
+          logger.error(err.message, err);
+          const errorResponse = new ErrorResponse(
+            'INTERNAL_SERVER_ERROR',
+            'Internal Server Error',
+          );
+          return reject(errorResponse);
+        }
+        resolve(result === 'blacklisted');
+      });
+    });
+  }
+
+  blacklistUserTokens(userId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      client.set(
+        `bl_user_${userId}`,
+        'blacklisted',
+        'EX',
+        this.redisBlacklistExpireTime,
+        (redisErr: any) => {
+          if (redisErr) {
+            logger.error(redisErr.message, redisErr);
+            const errorResponse = new ErrorResponse(
+              'INTERNAL_SERVER_ERROR',
+              'Internal Server Error',
+            );
+            return reject(errorResponse);
+          }
+          resolve();
+        },
+      );
+    });
+  }
+
+  async invalidateUserSessions(userId: string): Promise<void> {
+    await this.blacklistUserTokens(userId);
+    await this.removeFromRedis(userId);
   }
 
   checkAccessToken(accessToken: string): Promise<{ userId: string }> {

@@ -8,3 +8,7 @@ export const createUserSchema = Joi.object({
   role: Joi.string().valid('admin', 'user', 'guest').optional(),
   profilePhoto: Joi.string().optional(),
 });
+
+export const updateRoleSchema = Joi.object({
+  role: Joi.string().valid('admin', 'user', 'guest').required(),
+});
