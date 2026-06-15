@@ -17,3 +17,9 @@ export interface IUser extends IBaseModel {
 }
 
 export interface IUserModel extends IUser, IBaseModel, Document {}
+
+/**
+ * Safe user profile returned to clients — excludes sensitive fields like
+ * `password` so callers don't have to cast through `any`.
+ */
+export type IUserProfile = Omit<IUser, 'password'>;

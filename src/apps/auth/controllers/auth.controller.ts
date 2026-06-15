@@ -1,162 +1,44 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services';
-import { ApiResponse, ErrorResponseType } from '../../../common/shared';
+import { controllerWrapper, HTTP_STATUS } from '../../../common/shared';
 
 class AuthController {
-  static async register(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.register(req.body);
-      if (response.success) {
-        ApiResponse.success(res, response, 201);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static register = controllerWrapper(
+    (req) => AuthService.register(req.body),
+    HTTP_STATUS.CREATED,
+  );
 
-  static async verifyAccount(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.verifyAccount(req.body);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static verifyAccount = controllerWrapper((req) =>
+    AuthService.verifyAccount(req.body),
+  );
 
-  static async loginWithPassword(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.loginWithPassword(req.body);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static loginWithPassword = controllerWrapper((req) =>
+    AuthService.loginWithPassword(req.body),
+  );
 
-  static async generateLoginOtp(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.generateLoginOtp(req.body.email);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static generateLoginOtp = controllerWrapper((req) =>
+    AuthService.generateLoginOtp(req.body.email),
+  );
 
-  static async loginWithOtp(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.loginWithOtp(req.body);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static loginWithOtp = controllerWrapper((req) =>
+    AuthService.loginWithOtp(req.body),
+  );
 
-  static async refreshToken(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.refresh(req.body.refreshToken);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static refreshToken = controllerWrapper((req) =>
+    AuthService.refresh(req.body.refreshToken),
+  );
 
-  static async logout(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const { accessToken, refreshToken } = req.body;
-      const response = await AuthService.logout(accessToken, refreshToken);
-      if (response.success) {
-        ApiResponse.success(res, response, 202);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static logout = controllerWrapper((req) => {
+    const { accessToken, refreshToken } = req.body;
+    return AuthService.logout(accessToken, refreshToken);
+  }, HTTP_STATUS.ACCEPTED);
 
-  static async forgotPassword(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.forgotPassword(req.body.email);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static forgotPassword = controllerWrapper((req) =>
+    AuthService.forgotPassword(req.body.email),
+  );
 
-  static async resetPassword(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await AuthService.resetPassword(req.body);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static resetPassword = controllerWrapper((req) =>
+    AuthService.resetPassword(req.body),
+  );
 }
 
 export default AuthController;

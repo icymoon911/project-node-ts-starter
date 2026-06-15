@@ -1,22 +1,92 @@
-import { OTPService } from '.';
 import {
   ErrorResponse,
   ErrorResponseType,
   JwtService,
   MailServiceUtilities,
   SuccessResponseType,
+  withServiceErrorHandling,
 } from '../../../common/shared';
 import { config } from '../../../core/config';
 import { IUserModel, UserService } from '../../users';
 import { IOTPModel } from '../types';
+import {
+  LoginWithOtpPayload,
+  LoginWithPasswordPayload,
+  RegisterPayload,
+  ResetPasswordPayload,
+  VerifyAccountPayload,
+} from '../types';
 
-class AuthService {
+// ---------------------------------------------------------------------------
+// Dependency injection types
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal shape of the dependencies AuthService needs.
+ * Using `typeof Singleton` preserves the exact method signatures while still
+ * letting tests inject mocks that satisfy the same shape.
+ */
+export interface IAuthServiceDeps {
+  userService: typeof UserService;
+  otpService: {
+    generate(
+      email: string,
+      purpose: string,
+    ): Promise<SuccessResponseType<IOTPModel> | ErrorResponseType>;
+    validate(
+      email: string,
+      code: string,
+      purpose: string,
+    ): Promise<SuccessResponseType<null> | ErrorResponseType>;
+  };
+  jwtService: typeof JwtService;
+  mailService: typeof MailServiceUtilities;
+}
+
+// ---------------------------------------------------------------------------
+// Response document shapes (typed instead of `any`)
+// ---------------------------------------------------------------------------
+
+export interface IAuthTokens {
+  access: string;
+  refresh: string;
+}
+
+export interface ILoginDocument {
+  token: IAuthTokens;
+  user: IUserModel;
+}
+
+export interface IRegisterDocument {
+  user: IUserModel;
+  otp: IOTPModel;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+export class AuthService {
+  private readonly deps: IAuthServiceDeps;
+
+  constructor(deps?: Partial<IAuthServiceDeps>) {
+    // Lazy-load OTPService to avoid circular import at module init time.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { default: defaultOtpService } = require('./otp.service');
+    this.deps = {
+      userService: deps?.userService ?? UserService,
+      otpService: deps?.otpService ?? defaultOtpService,
+      jwtService: deps?.jwtService ?? JwtService,
+      mailService: deps?.mailService ?? MailServiceUtilities,
+    };
+  }
+
   async register(
-    payload: any,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+    payload: RegisterPayload,
+  ): Promise<SuccessResponseType<IRegisterDocument> | ErrorResponseType> {
+    return withServiceErrorHandling(async () => {
       const { email } = payload;
-      const userResponse = (await UserService.findOne({
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -27,7 +97,7 @@ class AuthService {
         );
       }
 
-      const createUserResponse = (await UserService.create(
+      const createUserResponse = (await this.deps.userService.create(
         payload,
       )) as SuccessResponseType<IUserModel>;
 
@@ -35,12 +105,12 @@ class AuthService {
         throw createUserResponse.error;
       }
 
-      await MailServiceUtilities.sendAccountCreationEmail({
+      await this.deps.mailService.sendAccountCreationEmail({
         to: email,
         firstname: createUserResponse.document.firstname,
       });
 
-      const otpResponse = (await OTPService.generate(
+      const otpResponse = (await this.deps.otpService.generate(
         email,
         config.otp.purposes.ACCOUNT_VERIFICATION.code,
       )) as SuccessResponseType<IOTPModel>;
@@ -56,26 +126,15 @@ class AuthService {
           otp: otpResponse.document,
         },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async verifyAccount(
-    payload: any,
+    payload: VerifyAccountPayload,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
+    return withServiceErrorHandling(async () => {
       const { email, code } = payload;
-      const userResponse = (await UserService.findOne({
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -84,10 +143,10 @@ class AuthService {
       }
 
       if (userResponse.document.verified) {
-        return { success: true }; // If already verified, return success without further actions
+        return { success: true };
       }
 
-      const validateOtpResponse = await OTPService.validate(
+      const validateOtpResponse = await this.deps.otpService.validate(
         email,
         code,
         config.otp.purposes.ACCOUNT_VERIFICATION.code,
@@ -97,32 +156,22 @@ class AuthService {
         throw validateOtpResponse.error;
       }
 
-      const verifyUserResponse = await UserService.markAsVerified(email);
+      const verifyUserResponse =
+        await this.deps.userService.markAsVerified(email);
 
       if (!verifyUserResponse.success) {
         throw verifyUserResponse.error;
       }
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async generateLoginOtp(
     email: string,
   ): Promise<SuccessResponseType<IOTPModel> | ErrorResponseType> {
-    try {
-      const userResponse = (await UserService.findOne({
+    return withServiceErrorHandling(async () => {
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -143,7 +192,7 @@ class AuthService {
         );
       }
 
-      const otpResponse = await OTPService.generate(
+      const otpResponse = await this.deps.otpService.generate(
         email,
         config.otp.purposes.LOGIN_CONFIRMATION.code,
       );
@@ -153,26 +202,15 @@ class AuthService {
       }
 
       return otpResponse;
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async loginWithPassword(
-    payload: any,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+    payload: LoginWithPasswordPayload,
+  ): Promise<SuccessResponseType<ILoginDocument> | ErrorResponseType> {
+    return withServiceErrorHandling(async () => {
       const { email, password } = payload;
-      const userResponse = (await UserService.findOne({
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -181,10 +219,11 @@ class AuthService {
       }
 
       const user = userResponse.document;
-      const isValidPasswordResponse = (await UserService.isValidPassword(
-        user.id,
-        password,
-      )) as SuccessResponseType<{ isValid: boolean }>;
+      const isValidPasswordResponse =
+        (await this.deps.userService.isValidPassword(
+          user.id,
+          password,
+        )) as SuccessResponseType<{ isValid: boolean }>;
 
       if (
         !isValidPasswordResponse.success ||
@@ -204,8 +243,8 @@ class AuthService {
         );
       }
 
-      const accessToken = await JwtService.signAccessToken(user.id);
-      const refreshToken = await JwtService.signRefreshToken(user.id);
+      const accessToken = await this.deps.jwtService.signAccessToken(user.id);
+      const refreshToken = await this.deps.jwtService.signRefreshToken(user.id);
 
       return {
         success: true,
@@ -214,26 +253,15 @@ class AuthService {
           user,
         },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async loginWithOtp(
-    payload: any,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+    payload: LoginWithOtpPayload,
+  ): Promise<SuccessResponseType<ILoginDocument> | ErrorResponseType> {
+    return withServiceErrorHandling(async () => {
       const { email, code } = payload;
-      const userResponse = (await UserService.findOne({
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -243,7 +271,7 @@ class AuthService {
 
       const user = userResponse.document;
 
-      const validateOtpResponse = await OTPService.validate(
+      const validateOtpResponse = await this.deps.otpService.validate(
         email,
         code,
         config.otp.purposes.LOGIN_CONFIRMATION.code,
@@ -264,8 +292,8 @@ class AuthService {
         );
       }
 
-      const accessToken = await JwtService.signAccessToken(user.id);
-      const refreshToken = await JwtService.signRefreshToken(user.id);
+      const accessToken = await this.deps.jwtService.signAccessToken(user.id);
+      const refreshToken = await this.deps.jwtService.signRefreshToken(user.id);
 
       return {
         success: true,
@@ -274,56 +302,37 @@ class AuthService {
           user,
         },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async refresh(
     refreshToken: string,
-  ): Promise<SuccessResponseType<any> | ErrorResponseType> {
-    try {
+  ): Promise<SuccessResponseType<{ token: IAuthTokens }> | ErrorResponseType> {
+    return withServiceErrorHandling(async () => {
       if (!refreshToken) {
         throw new ErrorResponse('BAD_REQUEST', 'Refresh token is required.');
       }
 
-      const userId = await JwtService.verifyRefreshToken(refreshToken);
-      const accessToken = await JwtService.signAccessToken(userId);
-      // Refresh token change to ensure rotation
-      const newRefreshToken = await JwtService.signRefreshToken(userId);
+      const userId =
+        await this.deps.jwtService.verifyRefreshToken(refreshToken);
+      const accessToken = await this.deps.jwtService.signAccessToken(userId);
+      const newRefreshToken =
+        await this.deps.jwtService.signRefreshToken(userId);
 
       return {
         success: true,
-        document: { token: { access: accessToken, refresh: newRefreshToken } },
+        document: {
+          token: { access: accessToken, refresh: newRefreshToken },
+        },
       };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async logout(
     accessToken: string,
     refreshToken: string,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
+    return withServiceErrorHandling(async () => {
       if (!refreshToken || !accessToken) {
         throw new ErrorResponse(
           'BAD_REQUEST',
@@ -332,9 +341,9 @@ class AuthService {
       }
 
       const { userId: userIdFromRefresh } =
-        await JwtService.checkRefreshToken(refreshToken);
+        await this.deps.jwtService.checkRefreshToken(refreshToken);
       const { userId: userIdFromAccess } =
-        await JwtService.checkAccessToken(accessToken);
+        await this.deps.jwtService.checkAccessToken(accessToken);
 
       if (userIdFromRefresh !== userIdFromAccess) {
         throw new ErrorResponse(
@@ -343,36 +352,22 @@ class AuthService {
         );
       }
 
-      // Blacklist the access token
-      await JwtService.blacklistToken(accessToken);
-
-      // Remove the refresh token from Redis
-      await JwtService.removeFromRedis(userIdFromRefresh);
+      await this.deps.jwtService.blacklistToken(accessToken);
+      await this.deps.jwtService.removeFromRedis(userIdFromRefresh);
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async forgotPassword(
     email: string,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
+    return withServiceErrorHandling(async () => {
       if (!email) {
         throw new ErrorResponse('BAD_REQUEST', 'Email should be provided.');
       }
 
-      const userResponse = (await UserService.findOne({
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -393,7 +388,7 @@ class AuthService {
         );
       }
 
-      const otpResponse = await OTPService.generate(
+      const otpResponse = await this.deps.otpService.generate(
         email,
         config.otp.purposes.FORGOT_PASSWORD.code,
       );
@@ -403,28 +398,16 @@ class AuthService {
       }
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async resetPassword(
-    payload: any,
+    payload: ResetPasswordPayload,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
-      // We suppose a verification about new password and confirmation password have already been done
+    return withServiceErrorHandling(async () => {
       const { email, code, newPassword } = payload;
 
-      const userResponse = (await UserService.findOne({
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
 
@@ -445,7 +428,7 @@ class AuthService {
         );
       }
 
-      const validateOtpResponse = await OTPService.validate(
+      const validateOtpResponse = await this.deps.otpService.validate(
         email,
         code,
         config.otp.purposes.FORGOT_PASSWORD.code,
@@ -455,7 +438,7 @@ class AuthService {
         throw validateOtpResponse.error;
       }
 
-      const updatePasswordResponse = await UserService.updatePassword(
+      const updatePasswordResponse = await this.deps.userService.updatePassword(
         user.id,
         newPassword,
       );
@@ -465,18 +448,7 @@ class AuthService {
       }
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 }
 

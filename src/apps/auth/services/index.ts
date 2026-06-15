@@ -1,2 +1,8 @@
-export { default as AuthService } from './auth.service';
-export { default as OTPService } from './otp.service';
+export {
+  default as AuthService,
+  AuthService as AuthServiceClass,
+} from './auth.service';
+export {
+  default as OTPService,
+  OTPService as OTPServiceClass,
+} from './otp.service';

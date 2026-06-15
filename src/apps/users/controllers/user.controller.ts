@@ -1,82 +1,24 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { Request, Response, NextFunction } from 'express';
 import { UserService } from '../services';
-import { ApiResponse, ErrorResponseType } from '../../../common/shared';
+import { controllerWrapper, HTTP_STATUS } from '../../../common/shared';
 
 class UserController {
-  static async createUser(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await UserService.create(req.body);
-      if (response.success) {
-        ApiResponse.success(res, response, 201);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static createUser = controllerWrapper(
+    (req) => UserService.create(req.body),
+    HTTP_STATUS.CREATED,
+  );
 
-  static async getAllUsers(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const response = await UserService.findAll(req.query);
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static getAllUsers = controllerWrapper((req) =>
+    UserService.findAll(req.query),
+  );
 
-  static async getUserById(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const userId = req.params.id;
-      const response = await UserService.findOne({
-        _id: userId,
-      });
+  static getUserById = controllerWrapper((req) =>
+    UserService.findOne({ _id: req.params.id }),
+  );
 
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
-
-  static async getCurrentUser(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const userId = (req as any).payload?.aud as string;
-      const response = await UserService.getProfile(userId);
-
-      if (response.success) {
-        ApiResponse.success(res, response);
-      } else {
-        throw response;
-      }
-    } catch (error) {
-      ApiResponse.error(res, error as ErrorResponseType);
-    }
-  }
+  static getCurrentUser = controllerWrapper((req) => {
+    const userId = req.payload?.aud as string | undefined;
+    return UserService.getProfile(userId);
+  });
 }
 
 export default UserController;

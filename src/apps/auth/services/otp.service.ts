@@ -4,6 +4,7 @@ import {
   ErrorResponseType,
   MailServiceUtilities,
   SuccessResponseType,
+  withServiceErrorHandling,
 } from '../../../common/shared';
 import { IUserModel, UserService } from '../../users';
 import { OTPModel } from '../models';
@@ -12,22 +13,40 @@ import { config } from '../../../core/config';
 import { BaseService } from '../../../core/engine';
 import { OTPRepository } from '../repositories';
 
-class OTPService extends BaseService<IOTPModel, OTPRepository> {
-  constructor() {
+// ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
+
+export interface IOTPServiceDeps {
+  userService: typeof UserService;
+  mailService: typeof MailServiceUtilities;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+export class OTPService extends BaseService<IOTPModel, OTPRepository> {
+  private readonly deps: IOTPServiceDeps;
+
+  constructor(deps?: Partial<IOTPServiceDeps>) {
     const otpRepo = new OTPRepository(OTPModel);
     super(otpRepo, false);
+    this.deps = {
+      userService: deps?.userService ?? UserService,
+      mailService: deps?.mailService ?? MailServiceUtilities,
+    };
   }
 
   async generate(
     email: string,
     purpose: TOTPPurpose,
   ): Promise<SuccessResponseType<IOTPModel> | ErrorResponseType> {
-    try {
-      const userResponse = (await UserService.findOne({
+    return withServiceErrorHandling(async () => {
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
       if (!userResponse.success || !userResponse.document) {
-        // TODO: Customize this kind of error to override BaseService generic not found
         throw userResponse.error;
       }
 
@@ -41,7 +60,7 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
         purpose,
       });
 
-      const mailResponse = await MailServiceUtilities.sendOtp({
+      const mailResponse = await this.deps.mailService.sendOtp({
         to: user.email,
         code: otp.code,
         purpose,
@@ -52,18 +71,7 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
       }
 
       return { success: true, document: otp };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 
   async validate(
@@ -71,8 +79,8 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
     code: string,
     purpose: TOTPPurpose,
   ): Promise<SuccessResponseType<null> | ErrorResponseType> {
-    try {
-      const userResponse = (await UserService.findOne({
+    return withServiceErrorHandling(async () => {
+      const userResponse = (await this.deps.userService.findOne({
         email,
       })) as SuccessResponseType<IUserModel>;
       if (!userResponse.success || !userResponse.document) {
@@ -103,18 +111,7 @@ class OTPService extends BaseService<IOTPModel, OTPRepository> {
       await this.repository.markAsUsed(otp.id);
 
       return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof ErrorResponse
-            ? error
-            : new ErrorResponse(
-                'INTERNAL_SERVER_ERROR',
-                (error as Error).message,
-              ),
-      };
-    }
+    });
   }
 }
 
